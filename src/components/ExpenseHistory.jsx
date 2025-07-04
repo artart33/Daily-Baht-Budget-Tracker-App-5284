@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as FiIcons from 'react-icons/fi';
 import SafeIcon from '../common/SafeIcon';
+import ExportModal from './ExportModal';
 
-const { FiCalendar, FiDollarSign, FiTrendingUp, FiRefreshCw, FiTrash2, FiEdit2, FiCheck, FiX, FiChevronDown, FiChevronUp } = FiIcons;
+const { FiCalendar, FiDollarSign, FiTrendingUp, FiRefreshCw, FiTrash2, FiEdit2, FiCheck, FiX, FiChevronDown, FiChevronUp, FiDownload } = FiIcons;
 
 const ExpenseHistory = ({ darkMode }) => {
   const [historyData, setHistoryData] = useState([]);
@@ -13,6 +14,8 @@ const ExpenseHistory = ({ darkMode }) => {
   const [editingExpense, setEditingExpense] = useState(null);
   const [editAmount, setEditAmount] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [showExportModal, setShowExportModal] = useState(false);
 
   useEffect(() => {
     loadHistoryData();
@@ -68,65 +71,77 @@ const ExpenseHistory = ({ darkMode }) => {
     setEditingExpense({ id: expense.id, date });
     setEditAmount(expense.amount.toString());
     setEditDescription(expense.description);
+    setEditDate(expense.date || new Date().toISOString().split('T')[0]);
   };
 
-  const saveEditExpense = (expenseId, date) => {
-    if (!editAmount || !editDescription) return;
+  const saveEditExpense = (expenseId, originalDate) => {
+    if (!editAmount || !editDescription || !editDate) return;
 
-    const updatedHistoryData = historyData.map(day => {
-      if (day.date === date) {
-        const updatedExpenses = day.expenses.map(expense => 
-          expense.id === expenseId 
-            ? { ...expense, amount: parseFloat(editAmount), description: editDescription.trim() }
-            : expense
-        );
-        
-        // Update localStorage
-        localStorage.setItem(`expenses_${date}`, JSON.stringify(updatedExpenses));
-        
-        const totalSpent = updatedExpenses.reduce((sum, expense) => sum + expense.amount, 0);
-        return {
-          ...day,
-          expenses: updatedExpenses,
-          totalSpent,
-          remaining: day.budget - totalSpent
-        };
+    const newDateString = new Date(editDate).toDateString();
+    const originalDateString = originalDate;
+
+    if (newDateString !== originalDateString) {
+      // Moving expense to different date
+      // Remove from original date
+      const originalExpenses = JSON.parse(localStorage.getItem(`expenses_${originalDateString}`) || '[]');
+      const updatedOriginalExpenses = originalExpenses.filter(expense => expense.id !== expenseId);
+      localStorage.setItem(`expenses_${originalDateString}`, JSON.stringify(updatedOriginalExpenses));
+
+      // Add to new date
+      const newExpenses = JSON.parse(localStorage.getItem(`expenses_${newDateString}`) || '[]');
+      const updatedExpense = {
+        id: expenseId,
+        amount: parseFloat(editAmount),
+        description: editDescription.trim(),
+        date: editDate,
+        timestamp: new Date().toISOString()
+      };
+      newExpenses.push(updatedExpense);
+      localStorage.setItem(`expenses_${newDateString}`, JSON.stringify(newExpenses));
+
+      // Ensure budget exists for new date
+      if (!localStorage.getItem(`budget_${newDateString}`)) {
+        localStorage.setItem(`budget_${newDateString}`, '1000');
       }
-      return day;
-    });
+    } else {
+      // Same date, just update
+      const expenses = JSON.parse(localStorage.getItem(`expenses_${originalDateString}`) || '[]');
+      const updatedExpenses = expenses.map(expense => 
+        expense.id === expenseId 
+          ? { 
+              ...expense, 
+              amount: parseFloat(editAmount), 
+              description: editDescription.trim(),
+              date: editDate
+            }
+          : expense
+      );
+      localStorage.setItem(`expenses_${originalDateString}`, JSON.stringify(updatedExpenses));
+    }
+
+    // Reload history data
+    loadHistoryData();
     
-    setHistoryData(updatedHistoryData);
     setEditingExpense(null);
     setEditAmount('');
     setEditDescription('');
+    setEditDate('');
   };
 
   const cancelEditExpense = () => {
     setEditingExpense(null);
     setEditAmount('');
     setEditDescription('');
+    setEditDate('');
   };
 
   const deleteExpenseFromHistory = (expenseId, date) => {
-    const updatedHistoryData = historyData.map(day => {
-      if (day.date === date) {
-        const updatedExpenses = day.expenses.filter(expense => expense.id !== expenseId);
-        
-        // Update localStorage
-        localStorage.setItem(`expenses_${date}`, JSON.stringify(updatedExpenses));
-        
-        const totalSpent = updatedExpenses.reduce((sum, expense) => sum + expense.amount, 0);
-        return {
-          ...day,
-          expenses: updatedExpenses,
-          totalSpent,
-          remaining: day.budget - totalSpent
-        };
-      }
-      return day;
-    }).filter(day => day.expenses.length > 0); // Remove days with no expenses
+    const expenses = JSON.parse(localStorage.getItem(`expenses_${date}`) || '[]');
+    const updatedExpenses = expenses.filter(expense => expense.id !== expenseId);
+    localStorage.setItem(`expenses_${date}`, JSON.stringify(updatedExpenses));
     
-    setHistoryData(updatedHistoryData);
+    // Reload history data
+    loadHistoryData();
   };
 
   const startNewDay = () => {
@@ -159,6 +174,25 @@ const ExpenseHistory = ({ darkMode }) => {
     });
   };
 
+  const formatDisplayDate = (dateString) => {
+    if (!dateString) return 'No date';
+    const date = new Date(dateString);
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+    
+    if (date.toDateString() === today.toDateString()) {
+      return 'Today';
+    } else if (date.toDateString() === yesterday.toDateString()) {
+      return 'Yesterday';
+    } else {
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric'
+      });
+    }
+  };
+
   const convertToHomeCurrency = (amount) => {
     return (amount * exchangeRate).toFixed(2);
   };
@@ -184,18 +218,25 @@ const ExpenseHistory = ({ darkMode }) => {
         initial={{ scale: 0.95, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         transition={{ delay: 0.1 }}
-        className="flex gap-2 mb-6"
+        className="grid grid-cols-3 gap-2 mb-6"
       >
         <button
+          onClick={() => setShowExportModal(true)}
+          className="bg-blue-500 text-white py-3 rounded-lg font-semibold hover:bg-blue-600 transition-colors flex items-center justify-center gap-2"
+        >
+          <SafeIcon icon={FiDownload} />
+          Export
+        </button>
+        <button
           onClick={startNewDay}
-          className="flex-1 bg-green-500 text-white py-3 rounded-lg font-semibold hover:bg-green-600 transition-colors flex items-center justify-center gap-2"
+          className="bg-green-500 text-white py-3 rounded-lg font-semibold hover:bg-green-600 transition-colors flex items-center justify-center gap-2"
         >
           <SafeIcon icon={FiRefreshCw} />
           New Day
         </button>
         <button
           onClick={clearAllHistory}
-          className="flex-1 bg-red-500 text-white py-3 rounded-lg font-semibold hover:bg-red-600 transition-colors flex items-center justify-center gap-2"
+          className="bg-red-500 text-white py-3 rounded-lg font-semibold hover:bg-red-600 transition-colors flex items-center justify-center gap-2"
         >
           <SafeIcon icon={FiTrash2} />
           Clear All
@@ -387,6 +428,24 @@ const ExpenseHistory = ({ darkMode }) => {
                               }`}
                               placeholder="Description"
                             />
+                            <div>
+                              <div className="flex items-center gap-2 mb-2">
+                                <SafeIcon icon={FiCalendar} className={`text-sm ${darkMode ? 'text-orange-400' : 'text-orange-600'}`} />
+                                <label className={`text-xs font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                                  Date
+                                </label>
+                              </div>
+                              <input
+                                type="date"
+                                value={editDate}
+                                onChange={(e) => setEditDate(e.target.value)}
+                                className={`w-full px-3 py-2 rounded-lg border text-sm ${
+                                  darkMode 
+                                    ? 'bg-gray-600 border-gray-500 text-white' 
+                                    : 'bg-white border-gray-300 text-gray-800'
+                                }`}
+                              />
+                            </div>
                             <div className="flex gap-2">
                               <button
                                 onClick={() => saveEditExpense(expense.id, day.date)}
@@ -408,15 +467,20 @@ const ExpenseHistory = ({ darkMode }) => {
                           // View Mode
                           <div className="flex justify-between items-center">
                             <div className="flex-1">
-                              <span className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                              <span className={`text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
                                 {expense.description}
                               </span>
                               <div className={`text-xs ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>
-                                {new Date(expense.timestamp).toLocaleTimeString('en-US', {
-                                  hour: 'numeric',
-                                  minute: '2-digit',
-                                  hour12: true
-                                })}
+                                <div className="flex items-center gap-2">
+                                  <SafeIcon icon={FiCalendar} className="text-xs" />
+                                  {formatDisplayDate(expense.date)}
+                                  <span>•</span>
+                                  {new Date(expense.timestamp).toLocaleTimeString('en-US', {
+                                    hour: 'numeric',
+                                    minute: '2-digit',
+                                    hour12: true
+                                  })}
+                                </div>
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
@@ -455,6 +519,14 @@ const ExpenseHistory = ({ darkMode }) => {
           ))
         )}
       </motion.div>
+
+      {/* Export Modal */}
+      <ExportModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        darkMode={darkMode}
+        currentDayExpenses={[]}
+      />
     </div>
   );
 };

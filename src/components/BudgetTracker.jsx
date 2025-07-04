@@ -2,19 +2,23 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as FiIcons from 'react-icons/fi';
 import SafeIcon from '../common/SafeIcon';
+import ExportModal from './ExportModal';
 
-const { FiPlus, FiDollarSign, FiTrendingUp, FiTrendingDown, FiTrash2, FiEdit2, FiCheck, FiX } = FiIcons;
+const { FiPlus, FiDollarSign, FiTrendingUp, FiTrendingDown, FiTrash2, FiEdit2, FiCheck, FiX, FiCalendar, FiDownload } = FiIcons;
 
 const BudgetTracker = ({ darkMode }) => {
   const [dailyBudget, setDailyBudget] = useState(1000);
   const [expenses, setExpenses] = useState([]);
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
+  const [expenseDate, setExpenseDate] = useState(new Date().toISOString().split('T')[0]);
   const [showBudgetInput, setShowBudgetInput] = useState(false);
   const [newBudget, setNewBudget] = useState('');
   const [editingExpense, setEditingExpense] = useState(null);
   const [editAmount, setEditAmount] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [editDate, setEditDate] = useState('');
+  const [showExportModal, setShowExportModal] = useState(false);
 
   useEffect(() => {
     loadTodaysData();
@@ -40,23 +44,46 @@ const BudgetTracker = ({ darkMode }) => {
     localStorage.setItem(`expenses_${today}`, JSON.stringify(newExpenses));
   };
 
+  const saveExpenseToDate = (expense, dateString) => {
+    const targetDate = new Date(dateString).toDateString();
+    const existingExpenses = JSON.parse(localStorage.getItem(`expenses_${targetDate}`) || '[]');
+    const updatedExpenses = [...existingExpenses, expense];
+    localStorage.setItem(`expenses_${targetDate}`, JSON.stringify(updatedExpenses));
+    
+    // Also save budget for that date if it doesn't exist
+    if (!localStorage.getItem(`budget_${targetDate}`)) {
+      localStorage.setItem(`budget_${targetDate}`, dailyBudget.toString());
+    }
+  };
+
   const addExpense = (e) => {
     e.preventDefault();
-    if (!amount || !description) return;
+    if (!amount || !description || !expenseDate) return;
 
     const newExpense = {
       id: Date.now(),
       amount: parseFloat(amount),
       description: description.trim(),
+      date: expenseDate,
       timestamp: new Date().toISOString()
     };
 
-    const updatedExpenses = [...expenses, newExpense];
-    setExpenses(updatedExpenses);
-    saveTodaysData(updatedExpenses);
+    const selectedDate = new Date(expenseDate).toDateString();
+    const today = new Date().toDateString();
+
+    if (selectedDate === today) {
+      // Add to current day's expenses
+      const updatedExpenses = [...expenses, newExpense];
+      setExpenses(updatedExpenses);
+      saveTodaysData(updatedExpenses);
+    } else {
+      // Add to different date
+      saveExpenseToDate(newExpense, expenseDate);
+    }
     
     setAmount('');
     setDescription('');
+    setExpenseDate(new Date().toISOString().split('T')[0]);
   };
 
   const deleteExpense = (id) => {
@@ -69,29 +96,59 @@ const BudgetTracker = ({ darkMode }) => {
     setEditingExpense(expense.id);
     setEditAmount(expense.amount.toString());
     setEditDescription(expense.description);
+    setEditDate(expense.date || new Date().toISOString().split('T')[0]);
   };
 
   const saveEditExpense = (id) => {
-    if (!editAmount || !editDescription) return;
+    if (!editAmount || !editDescription || !editDate) return;
 
-    const updatedExpenses = expenses.map(expense => 
-      expense.id === id 
-        ? { ...expense, amount: parseFloat(editAmount), description: editDescription.trim() }
-        : expense
-    );
-    
-    setExpenses(updatedExpenses);
-    saveTodaysData(updatedExpenses);
+    const expense = expenses.find(e => e.id === id);
+    const oldDate = expense.date || new Date().toDateString();
+    const newDate = new Date(editDate).toDateString();
+
+    if (oldDate !== newDate) {
+      // Moving expense to different date
+      // Remove from current date
+      const updatedExpenses = expenses.filter(e => e.id !== id);
+      setExpenses(updatedExpenses);
+      saveTodaysData(updatedExpenses);
+
+      // Add to new date
+      const updatedExpense = {
+        ...expense,
+        amount: parseFloat(editAmount),
+        description: editDescription.trim(),
+        date: editDate
+      };
+      saveExpenseToDate(updatedExpense, editDate);
+    } else {
+      // Same date, just update
+      const updatedExpenses = expenses.map(expense => 
+        expense.id === id 
+          ? { 
+              ...expense, 
+              amount: parseFloat(editAmount), 
+              description: editDescription.trim(),
+              date: editDate
+            }
+          : expense
+      );
+      
+      setExpenses(updatedExpenses);
+      saveTodaysData(updatedExpenses);
+    }
     
     setEditingExpense(null);
     setEditAmount('');
     setEditDescription('');
+    setEditDate('');
   };
 
   const cancelEditExpense = () => {
     setEditingExpense(null);
     setEditAmount('');
     setEditDescription('');
+    setEditDate('');
   };
 
   const updateBudget = () => {
@@ -108,6 +165,25 @@ const BudgetTracker = ({ darkMode }) => {
   const remaining = dailyBudget - totalSpent;
   const progressPercentage = Math.min((totalSpent / dailyBudget) * 100, 100);
 
+  const formatDisplayDate = (dateString) => {
+    if (!dateString) return 'Today';
+    const date = new Date(dateString);
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+    
+    if (date.toDateString() === today.toDateString()) {
+      return 'Today';
+    } else if (date.toDateString() === yesterday.toDateString()) {
+      return 'Yesterday';
+    } else {
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric'
+      });
+    }
+  };
+
   return (
     <div className="flex-1 p-4 pb-20">
       {/* Header */}
@@ -116,9 +192,24 @@ const BudgetTracker = ({ darkMode }) => {
         animate={{ y: 0, opacity: 1 }}
         className="text-center mb-6"
       >
-        <h1 className={`text-3xl font-bold mb-2 ${darkMode ? 'text-white' : 'text-gray-800'}`}>
-          Daily Baht Tracker
-        </h1>
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex-1"></div>
+          <h1 className={`text-3xl font-bold ${darkMode ? 'text-white' : 'text-gray-800'}`}>
+            Daily Baht Tracker
+          </h1>
+          <div className="flex-1 flex justify-end">
+            <button
+              onClick={() => setShowExportModal(true)}
+              className={`p-2 rounded-lg transition-colors ${
+                darkMode 
+                  ? 'text-gray-400 hover:text-blue-400 hover:bg-gray-700' 
+                  : 'text-gray-600 hover:text-blue-600 hover:bg-gray-100'
+              }`}
+            >
+              <SafeIcon icon={FiDownload} className="text-xl" />
+            </button>
+          </div>
+        </div>
         <p className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
           {new Date().toLocaleDateString('en-US', { 
             weekday: 'long', 
@@ -277,6 +368,25 @@ const BudgetTracker = ({ darkMode }) => {
               required
             />
           </div>
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <SafeIcon icon={FiCalendar} className={`text-lg ${darkMode ? 'text-orange-400' : 'text-orange-600'}`} />
+              <label className={`text-sm font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                Date
+              </label>
+            </div>
+            <input
+              type="date"
+              value={expenseDate}
+              onChange={(e) => setExpenseDate(e.target.value)}
+              className={`w-full px-4 py-3 rounded-lg border ${
+                darkMode 
+                  ? 'bg-gray-700 border-gray-600 text-white' 
+                  : 'bg-white border-gray-300 text-gray-800'
+              }`}
+              required
+            />
+          </div>
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
@@ -352,6 +462,24 @@ const BudgetTracker = ({ darkMode }) => {
                         }`}
                         placeholder="Description"
                       />
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <SafeIcon icon={FiCalendar} className={`text-sm ${darkMode ? 'text-orange-400' : 'text-orange-600'}`} />
+                          <label className={`text-xs font-medium ${darkMode ? 'text-gray-300' : 'text-gray-700'}`}>
+                            Date
+                          </label>
+                        </div>
+                        <input
+                          type="date"
+                          value={editDate}
+                          onChange={(e) => setEditDate(e.target.value)}
+                          className={`w-full px-3 py-2 rounded-lg border text-sm ${
+                            darkMode 
+                              ? 'bg-gray-600 border-gray-500 text-white' 
+                              : 'bg-white border-gray-300 text-gray-800'
+                          }`}
+                        />
+                      </div>
                       <div className="flex gap-2">
                         <button
                           onClick={() => saveEditExpense(expense.id)}
@@ -377,11 +505,16 @@ const BudgetTracker = ({ darkMode }) => {
                           {expense.description}
                         </div>
                         <div className={`text-sm ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
-                          {new Date(expense.timestamp).toLocaleTimeString('en-US', {
-                            hour: 'numeric',
-                            minute: '2-digit',
-                            hour12: true
-                          })}
+                          <div className="flex items-center gap-2">
+                            <SafeIcon icon={FiCalendar} className="text-xs" />
+                            {formatDisplayDate(expense.date)}
+                            <span className="text-xs">•</span>
+                            {new Date(expense.timestamp).toLocaleTimeString('en-US', {
+                              hour: 'numeric',
+                              minute: '2-digit',
+                              hour12: true
+                            })}
+                          </div>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -417,6 +550,14 @@ const BudgetTracker = ({ darkMode }) => {
           )}
         </AnimatePresence>
       </motion.div>
+
+      {/* Export Modal */}
+      <ExportModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        darkMode={darkMode}
+        currentDayExpenses={expenses}
+      />
     </div>
   );
 };
