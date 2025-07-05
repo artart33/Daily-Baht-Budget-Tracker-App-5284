@@ -3,6 +3,20 @@ import { motion, AnimatePresence } from 'framer-motion';
 import * as FiIcons from 'react-icons/fi';
 import SafeIcon from '../common/SafeIcon';
 import ExportModal from './ExportModal';
+import { 
+  getAllExpenseData,
+  deleteExpenseFromDate,
+  updateExpenseInDate,
+  addExpenseToDate,
+  clearAllData,
+  loadHomeCurrency,
+  saveHomeCurrency,
+  loadExchangeRate,
+  saveExchangeRate,
+  getDateKey,
+  saveBudgetToDate,
+  loadBudgetFromDate
+} from '../utils/storageUtils';
 
 const { FiCalendar, FiDollarSign, FiTrendingUp, FiRefreshCw, FiTrash2, FiEdit2, FiCheck, FiX, FiChevronDown, FiChevronUp, FiDownload } = FiIcons;
 
@@ -16,45 +30,44 @@ const ExpenseHistory = ({ darkMode }) => {
   const [editDescription, setEditDescription] = useState('');
   const [editDate, setEditDate] = useState('');
   const [showExportModal, setShowExportModal] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    loadHistoryData();
-    loadCurrencySettings();
+    loadAllData();
   }, []);
 
-  const loadHistoryData = () => {
-    const history = [];
-    const keys = Object.keys(localStorage);
-    
-    keys.forEach(key => {
-      if (key.startsWith('expenses_')) {
-        const date = key.replace('expenses_', '');
-        const expenses = JSON.parse(localStorage.getItem(key) || '[]');
-        const budget = parseFloat(localStorage.getItem(`budget_${date}`) || '1000');
-        
-        if (expenses.length > 0) {
-          const totalSpent = expenses.reduce((sum, expense) => sum + expense.amount, 0);
-          history.push({
-            date,
-            expenses,
-            budget,
-            totalSpent,
-            remaining: budget - totalSpent
-          });
-        }
-      }
-    });
-    
-    history.sort((a, b) => new Date(b.date) - new Date(a.date));
-    setHistoryData(history);
+  const loadAllData = async () => {
+    try {
+      setIsLoading(true);
+      
+      // Load history data
+      const history = getAllExpenseData();
+      setHistoryData(history);
+      
+      // Load currency settings
+      const savedCurrency = loadHomeCurrency();
+      const savedRate = loadExchangeRate();
+      
+      setHomeCurrency(savedCurrency);
+      setExchangeRate(savedRate);
+      
+      console.log('History data loaded:', { 
+        days: history.length, 
+        currency: savedCurrency, 
+        rate: savedRate 
+      });
+      
+    } catch (error) {
+      console.error('Error loading history data:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const loadCurrencySettings = () => {
-    const savedCurrency = localStorage.getItem('homeCurrency');
-    const savedRate = localStorage.getItem('exchangeRate');
-    
-    if (savedCurrency) setHomeCurrency(savedCurrency);
-    if (savedRate) setExchangeRate(parseFloat(savedRate));
+  const refreshHistoryData = () => {
+    const history = getAllExpenseData();
+    setHistoryData(history);
+    console.log('History data refreshed:', history.length, 'days');
   };
 
   const toggleDayExpansion = (date) => {
@@ -74,21 +87,15 @@ const ExpenseHistory = ({ darkMode }) => {
     setEditDate(expense.date || new Date().toISOString().split('T')[0]);
   };
 
-  const saveEditExpense = (expenseId, originalDate) => {
+  const saveEditExpense = async (expenseId, originalDate) => {
     if (!editAmount || !editDescription || !editDate) return;
 
-    const newDateString = new Date(editDate).toDateString();
-    const originalDateString = originalDate;
+    try {
+      const newDate = new Date(editDate);
+      const originalDateObj = new Date(originalDate);
+      const newDateKey = getDateKey(newDate);
+      const originalDateKey = getDateKey(originalDateObj);
 
-    if (newDateString !== originalDateString) {
-      // Moving expense to different date
-      // Remove from original date
-      const originalExpenses = JSON.parse(localStorage.getItem(`expenses_${originalDateString}`) || '[]');
-      const updatedOriginalExpenses = originalExpenses.filter(expense => expense.id !== expenseId);
-      localStorage.setItem(`expenses_${originalDateString}`, JSON.stringify(updatedOriginalExpenses));
-
-      // Add to new date
-      const newExpenses = JSON.parse(localStorage.getItem(`expenses_${newDateString}`) || '[]');
       const updatedExpense = {
         id: expenseId,
         amount: parseFloat(editAmount),
@@ -96,36 +103,52 @@ const ExpenseHistory = ({ darkMode }) => {
         date: editDate,
         timestamp: new Date().toISOString()
       };
-      newExpenses.push(updatedExpense);
-      localStorage.setItem(`expenses_${newDateString}`, JSON.stringify(newExpenses));
 
-      // Ensure budget exists for new date
-      if (!localStorage.getItem(`budget_${newDateString}`)) {
-        localStorage.setItem(`budget_${newDateString}`, '1000');
+      if (newDateKey !== originalDateKey) {
+        // Moving expense to different date
+        // Remove from original date
+        const success1 = deleteExpenseFromDate(expenseId, originalDateObj);
+        if (!success1) {
+          alert('Failed to move expense. Please try again.');
+          return;
+        }
+
+        // Add to new date
+        const success2 = addExpenseToDate(updatedExpense, newDate);
+        if (!success2) {
+          alert('Failed to move expense. Please try again.');
+          return;
+        }
+
+        // Ensure budget exists for new date
+        const existingBudget = loadBudgetFromDate(newDate);
+        if (!existingBudget) {
+          saveBudgetToDate(1000, newDate);
+        }
+      } else {
+        // Same date, just update
+        const success = updateExpenseInDate(expenseId, updatedExpense, originalDateObj);
+        if (!success) {
+          alert('Failed to update expense. Please try again.');
+          return;
+        }
       }
-    } else {
-      // Same date, just update
-      const expenses = JSON.parse(localStorage.getItem(`expenses_${originalDateString}`) || '[]');
-      const updatedExpenses = expenses.map(expense => 
-        expense.id === expenseId 
-          ? { 
-              ...expense, 
-              amount: parseFloat(editAmount), 
-              description: editDescription.trim(),
-              date: editDate
-            }
-          : expense
-      );
-      localStorage.setItem(`expenses_${originalDateString}`, JSON.stringify(updatedExpenses));
-    }
 
-    // Reload history data
-    loadHistoryData();
-    
-    setEditingExpense(null);
-    setEditAmount('');
-    setEditDescription('');
-    setEditDate('');
+      // Refresh history data
+      refreshHistoryData();
+      
+      // Reset edit state
+      setEditingExpense(null);
+      setEditAmount('');
+      setEditDescription('');
+      setEditDate('');
+      
+      console.log('Expense updated successfully:', updatedExpense);
+      
+    } catch (error) {
+      console.error('Error updating expense:', error);
+      alert('Failed to update expense. Please try again.');
+    }
   };
 
   const cancelEditExpense = () => {
@@ -135,34 +158,69 @@ const ExpenseHistory = ({ darkMode }) => {
     setEditDate('');
   };
 
-  const deleteExpenseFromHistory = (expenseId, date) => {
-    const expenses = JSON.parse(localStorage.getItem(`expenses_${date}`) || '[]');
-    const updatedExpenses = expenses.filter(expense => expense.id !== expenseId);
-    localStorage.setItem(`expenses_${date}`, JSON.stringify(updatedExpenses));
-    
-    // Reload history data
-    loadHistoryData();
+  const deleteExpenseFromHistory = async (expenseId, date) => {
+    try {
+      const dateObj = new Date(date);
+      const success = deleteExpenseFromDate(expenseId, dateObj);
+      
+      if (success) {
+        refreshHistoryData();
+        console.log('Expense deleted successfully:', expenseId);
+      } else {
+        alert('Failed to delete expense. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error deleting expense:', error);
+      alert('Failed to delete expense. Please try again.');
+    }
   };
 
   const startNewDay = () => {
     if (confirm('Are you sure you want to start a new day? This will reset your current expenses.')) {
-      const today = new Date().toDateString();
-      localStorage.removeItem(`expenses_${today}`);
-      localStorage.removeItem(`budget_${today}`);
-      window.location.reload();
+      try {
+        const today = new Date();
+        const todayKey = getDateKey(today);
+        
+        // Clear today's data
+        localStorage.removeItem(`expenses_${todayKey}`);
+        localStorage.removeItem(`budget_${todayKey}`);
+        
+        // Refresh the page
+        window.location.reload();
+      } catch (error) {
+        console.error('Error starting new day:', error);
+        alert('Failed to start new day. Please try again.');
+      }
     }
   };
 
   const clearAllHistory = () => {
     if (confirm('Are you sure you want to clear all history? This action cannot be undone.')) {
-      const keys = Object.keys(localStorage);
-      keys.forEach(key => {
-        if (key.startsWith('expenses_') || key.startsWith('budget_')) {
-          localStorage.removeItem(key);
+      try {
+        const success = clearAllData();
+        if (success) {
+          setHistoryData([]);
+          console.log('All history cleared successfully');
+        } else {
+          alert('Failed to clear history. Please try again.');
         }
-      });
-      setHistoryData([]);
+      } catch (error) {
+        console.error('Error clearing history:', error);
+        alert('Failed to clear history. Please try again.');
+      }
     }
+  };
+
+  const updateHomeCurrency = (currency) => {
+    setHomeCurrency(currency);
+    saveHomeCurrency(currency);
+    console.log('Home currency updated:', currency);
+  };
+
+  const updateExchangeRate = (rate) => {
+    setExchangeRate(rate);
+    saveExchangeRate(rate);
+    console.log('Exchange rate updated:', rate);
   };
 
   const formatDate = (dateString) => {
@@ -197,6 +255,19 @@ const ExpenseHistory = ({ darkMode }) => {
     return (amount * exchangeRate).toFixed(2);
   };
 
+  if (isLoading) {
+    return (
+      <div className="flex-1 p-4 pb-20 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500 mx-auto mb-4"></div>
+          <p className={`text-lg ${darkMode ? 'text-white' : 'text-gray-800'}`}>
+            Loading expense history...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex-1 p-4 pb-20">
       {/* Header */}
@@ -210,6 +281,9 @@ const ExpenseHistory = ({ darkMode }) => {
         </h1>
         <p className={`text-sm ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
           Track your spending over time
+        </p>
+        <p className={`text-xs mt-1 ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+          {historyData.length} day{historyData.length !== 1 ? 's' : ''} with expenses recorded
         </p>
       </motion.div>
 
@@ -262,10 +336,7 @@ const ExpenseHistory = ({ darkMode }) => {
             </label>
             <select
               value={homeCurrency}
-              onChange={(e) => {
-                setHomeCurrency(e.target.value);
-                localStorage.setItem('homeCurrency', e.target.value);
-              }}
+              onChange={(e) => updateHomeCurrency(e.target.value)}
               className={`w-full px-3 py-2 rounded-lg border ${
                 darkMode 
                   ? 'bg-gray-700 border-gray-600 text-white' 
@@ -288,10 +359,7 @@ const ExpenseHistory = ({ darkMode }) => {
               type="number"
               step="0.001"
               value={exchangeRate}
-              onChange={(e) => {
-                setExchangeRate(parseFloat(e.target.value));
-                localStorage.setItem('exchangeRate', e.target.value);
-              }}
+              onChange={(e) => updateExchangeRate(parseFloat(e.target.value))}
               className={`w-full px-3 py-2 rounded-lg border ${
                 darkMode 
                   ? 'bg-gray-700 border-gray-600 text-white' 
@@ -314,8 +382,11 @@ const ExpenseHistory = ({ darkMode }) => {
             darkMode ? 'bg-gray-800 border border-gray-700' : 'bg-white'
           } shadow-lg`}>
             <SafeIcon icon={FiCalendar} className={`text-4xl mx-auto mb-4 ${darkMode ? 'text-gray-400' : 'text-gray-300'}`} />
-            <p className={`${darkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+            <p className={`text-lg mb-2 ${darkMode ? 'text-gray-300' : 'text-gray-600'}`}>
               No expense history yet
+            </p>
+            <p className={`text-sm ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+              Start adding expenses to see your history here
             </p>
           </div>
         ) : (
@@ -404,6 +475,7 @@ const ExpenseHistory = ({ darkMode }) => {
                             <div className="flex gap-2">
                               <input
                                 type="number"
+                                step="0.01"
                                 value={editAmount}
                                 onChange={(e) => setEditAmount(e.target.value)}
                                 className={`flex-1 px-3 py-2 rounded-lg border text-sm ${

@@ -1,5 +1,6 @@
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
+import { getAllExpenseData } from './storageUtils';
 
 // CSV Export Functions
 export const exportToCSV = (data, filename = 'expenses') => {
@@ -158,7 +159,9 @@ export const exportAllDataToPDF = () => {
   doc.text(`Total Expenses: ฿${grandTotal.toLocaleString()}`, 20, yPosition);
   doc.text(`Number of Days: ${sortedDates.length}`, 20, yPosition + 10);
   doc.text(`Total Transactions: ${totalExpenses}`, 20, yPosition + 20);
-  doc.text(`Average Daily Spending: ฿${(grandTotal / sortedDates.length).toFixed(2)}`, 20, yPosition + 30);
+  if (sortedDates.length > 0) {
+    doc.text(`Average Daily Spending: ฿${(grandTotal / sortedDates.length).toFixed(2)}`, 20, yPosition + 30);
+  }
   
   doc.save('complete_expense_history.pdf');
 };
@@ -291,32 +294,6 @@ const convertAllDataToCSV = (allData) => {
   });
   
   return csvRows.join('\n');
-};
-
-const getAllExpenseData = () => {
-  const history = [];
-  const keys = Object.keys(localStorage);
-  
-  keys.forEach(key => {
-    if (key.startsWith('expenses_')) {
-      const date = key.replace('expenses_', '');
-      const expenses = JSON.parse(localStorage.getItem(key) || '[]');
-      const budget = parseFloat(localStorage.getItem(`budget_${date}`) || '1000');
-      
-      if (expenses.length > 0) {
-        const totalSpent = expenses.reduce((sum, expense) => sum + expense.amount, 0);
-        history.push({
-          date,
-          expenses,
-          budget,
-          totalSpent,
-          remaining: budget - totalSpent
-        });
-      }
-    }
-  });
-  
-  return history.sort((a, b) => new Date(b.date) - new Date(a.date));
 };
 
 const getDateRangeData = (startDate, endDate) => {

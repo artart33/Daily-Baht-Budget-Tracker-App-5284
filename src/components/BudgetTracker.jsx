@@ -3,6 +3,17 @@ import { motion, AnimatePresence } from 'framer-motion';
 import * as FiIcons from 'react-icons/fi';
 import SafeIcon from '../common/SafeIcon';
 import ExportModal from './ExportModal';
+import { 
+  saveExpensesToDate, 
+  loadExpensesFromDate, 
+  addExpenseToDate,
+  updateExpenseInDate,
+  deleteExpenseFromDate,
+  saveBudgetToDate,
+  loadBudgetFromDate,
+  getDateKey,
+  formatDateForStorage
+} from '../utils/storageUtils';
 
 const { FiPlus, FiDollarSign, FiTrendingUp, FiTrendingDown, FiTrash2, FiEdit2, FiCheck, FiX, FiCalendar, FiDownload } = FiIcons;
 
@@ -19,77 +30,103 @@ const BudgetTracker = ({ darkMode }) => {
   const [editDescription, setEditDescription] = useState('');
   const [editDate, setEditDate] = useState('');
   const [showExportModal, setShowExportModal] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     loadTodaysData();
   }, []);
 
-  const loadTodaysData = () => {
-    const today = new Date().toDateString();
-    const savedBudget = localStorage.getItem(`budget_${today}`);
-    const savedExpenses = localStorage.getItem(`expenses_${today}`);
-    
-    if (savedBudget) {
-      setDailyBudget(parseFloat(savedBudget));
-    }
-    
-    if (savedExpenses) {
-      setExpenses(JSON.parse(savedExpenses));
+  const loadTodaysData = async () => {
+    try {
+      setIsLoading(true);
+      const today = new Date();
+      
+      // Load today's budget
+      const savedBudget = loadBudgetFromDate(today);
+      setDailyBudget(savedBudget);
+      
+      // Load today's expenses
+      const savedExpenses = loadExpensesFromDate(today);
+      setExpenses(savedExpenses);
+      
+      console.log('Today\'s data loaded:', { budget: savedBudget, expenses: savedExpenses.length });
+    } catch (error) {
+      console.error('Error loading today\'s data:', error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const saveTodaysData = (newExpenses, budget = dailyBudget) => {
-    const today = new Date().toDateString();
-    localStorage.setItem(`budget_${today}`, budget.toString());
-    localStorage.setItem(`expenses_${today}`, JSON.stringify(newExpenses));
-  };
-
-  const saveExpenseToDate = (expense, dateString) => {
-    const targetDate = new Date(dateString).toDateString();
-    const existingExpenses = JSON.parse(localStorage.getItem(`expenses_${targetDate}`) || '[]');
-    const updatedExpenses = [...existingExpenses, expense];
-    localStorage.setItem(`expenses_${targetDate}`, JSON.stringify(updatedExpenses));
-    
-    // Also save budget for that date if it doesn't exist
-    if (!localStorage.getItem(`budget_${targetDate}`)) {
-      localStorage.setItem(`budget_${targetDate}`, dailyBudget.toString());
+    try {
+      const today = new Date();
+      
+      // Save expenses
+      saveExpensesToDate(newExpenses, today);
+      
+      // Save budget
+      saveBudgetToDate(budget, today);
+      
+      console.log('Today\'s data saved:', { budget, expenses: newExpenses.length });
+    } catch (error) {
+      console.error('Error saving today\'s data:', error);
     }
   };
 
-  const addExpense = (e) => {
+  const addExpense = async (e) => {
     e.preventDefault();
     if (!amount || !description || !expenseDate) return;
 
-    const newExpense = {
-      id: Date.now(),
-      amount: parseFloat(amount),
-      description: description.trim(),
-      date: expenseDate,
-      timestamp: new Date().toISOString()
-    };
+    try {
+      const newExpense = {
+        id: Date.now() + Math.random(), // More unique ID
+        amount: parseFloat(amount),
+        description: description.trim(),
+        date: expenseDate,
+        timestamp: new Date().toISOString()
+      };
 
-    const selectedDate = new Date(expenseDate).toDateString();
-    const today = new Date().toDateString();
+      const selectedDate = new Date(expenseDate);
+      const today = new Date();
+      const selectedDateKey = getDateKey(selectedDate);
+      const todayKey = getDateKey(today);
 
-    if (selectedDate === today) {
-      // Add to current day's expenses
-      const updatedExpenses = [...expenses, newExpense];
-      setExpenses(updatedExpenses);
-      saveTodaysData(updatedExpenses);
-    } else {
-      // Add to different date
-      saveExpenseToDate(newExpense, expenseDate);
+      if (selectedDateKey === todayKey) {
+        // Add to current day's expenses
+        const updatedExpenses = [...expenses, newExpense];
+        setExpenses(updatedExpenses);
+        saveTodaysData(updatedExpenses);
+      } else {
+        // Add to different date
+        const success = addExpenseToDate(newExpense, selectedDate);
+        if (!success) {
+          alert('Failed to save expense. Please try again.');
+          return;
+        }
+      }
+      
+      // Reset form
+      setAmount('');
+      setDescription('');
+      setExpenseDate(new Date().toISOString().split('T')[0]);
+      
+      console.log('Expense added successfully:', newExpense);
+    } catch (error) {
+      console.error('Error adding expense:', error);
+      alert('Failed to add expense. Please try again.');
     }
-    
-    setAmount('');
-    setDescription('');
-    setExpenseDate(new Date().toISOString().split('T')[0]);
   };
 
-  const deleteExpense = (id) => {
-    const updatedExpenses = expenses.filter(expense => expense.id !== id);
-    setExpenses(updatedExpenses);
-    saveTodaysData(updatedExpenses);
+  const deleteExpense = async (id) => {
+    try {
+      const updatedExpenses = expenses.filter(expense => expense.id !== id);
+      setExpenses(updatedExpenses);
+      saveTodaysData(updatedExpenses);
+      console.log('Expense deleted successfully:', id);
+    } catch (error) {
+      console.error('Error deleting expense:', error);
+      alert('Failed to delete expense. Please try again.');
+    }
   };
 
   const startEditExpense = (expense) => {
@@ -99,49 +136,58 @@ const BudgetTracker = ({ darkMode }) => {
     setEditDate(expense.date || new Date().toISOString().split('T')[0]);
   };
 
-  const saveEditExpense = (id) => {
+  const saveEditExpense = async (id) => {
     if (!editAmount || !editDescription || !editDate) return;
 
-    const expense = expenses.find(e => e.id === id);
-    const oldDate = expense.date || new Date().toDateString();
-    const newDate = new Date(editDate).toDateString();
+    try {
+      const expense = expenses.find(e => e.id === id);
+      const oldDate = new Date(expense.date || new Date());
+      const newDate = new Date(editDate);
+      const oldDateKey = getDateKey(oldDate);
+      const newDateKey = getDateKey(newDate);
 
-    if (oldDate !== newDate) {
-      // Moving expense to different date
-      // Remove from current date
-      const updatedExpenses = expenses.filter(e => e.id !== id);
-      setExpenses(updatedExpenses);
-      saveTodaysData(updatedExpenses);
-
-      // Add to new date
       const updatedExpense = {
         ...expense,
         amount: parseFloat(editAmount),
         description: editDescription.trim(),
-        date: editDate
+        date: editDate,
+        timestamp: expense.timestamp // Keep original timestamp
       };
-      saveExpenseToDate(updatedExpense, editDate);
-    } else {
-      // Same date, just update
-      const updatedExpenses = expenses.map(expense => 
-        expense.id === id 
-          ? { 
-              ...expense, 
-              amount: parseFloat(editAmount), 
-              description: editDescription.trim(),
-              date: editDate
-            }
-          : expense
-      );
+
+      if (oldDateKey !== newDateKey) {
+        // Moving expense to different date
+        // Remove from current date
+        const updatedExpenses = expenses.filter(e => e.id !== id);
+        setExpenses(updatedExpenses);
+        saveTodaysData(updatedExpenses);
+
+        // Add to new date
+        const success = addExpenseToDate(updatedExpense, newDate);
+        if (!success) {
+          alert('Failed to move expense. Please try again.');
+          return;
+        }
+      } else {
+        // Same date, just update
+        const updatedExpenses = expenses.map(exp => 
+          exp.id === id ? updatedExpense : exp
+        );
+        
+        setExpenses(updatedExpenses);
+        saveTodaysData(updatedExpenses);
+      }
       
-      setExpenses(updatedExpenses);
-      saveTodaysData(updatedExpenses);
+      // Reset edit state
+      setEditingExpense(null);
+      setEditAmount('');
+      setEditDescription('');
+      setEditDate('');
+      
+      console.log('Expense updated successfully:', updatedExpense);
+    } catch (error) {
+      console.error('Error updating expense:', error);
+      alert('Failed to update expense. Please try again.');
     }
-    
-    setEditingExpense(null);
-    setEditAmount('');
-    setEditDescription('');
-    setEditDate('');
   };
 
   const cancelEditExpense = () => {
@@ -151,13 +197,19 @@ const BudgetTracker = ({ darkMode }) => {
     setEditDate('');
   };
 
-  const updateBudget = () => {
+  const updateBudget = async () => {
     if (newBudget && parseFloat(newBudget) > 0) {
-      const budget = parseFloat(newBudget);
-      setDailyBudget(budget);
-      saveTodaysData(expenses, budget);
-      setNewBudget('');
-      setShowBudgetInput(false);
+      try {
+        const budget = parseFloat(newBudget);
+        setDailyBudget(budget);
+        saveTodaysData(expenses, budget);
+        setNewBudget('');
+        setShowBudgetInput(false);
+        console.log('Budget updated successfully:', budget);
+      } catch (error) {
+        console.error('Error updating budget:', error);
+        alert('Failed to update budget. Please try again.');
+      }
     }
   };
 
@@ -183,6 +235,19 @@ const BudgetTracker = ({ darkMode }) => {
       });
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex-1 p-4 pb-20 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500 mx-auto mb-4"></div>
+          <p className={`text-lg ${darkMode ? 'text-white' : 'text-gray-800'}`}>
+            Loading your budget data...
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 p-4 pb-20">
@@ -217,6 +282,9 @@ const BudgetTracker = ({ darkMode }) => {
             month: 'long', 
             day: 'numeric' 
           })}
+        </p>
+        <p className={`text-xs mt-1 ${darkMode ? 'text-gray-500' : 'text-gray-500'}`}>
+          {expenses.length} expense{expenses.length !== 1 ? 's' : ''} recorded today
         </p>
       </motion.div>
 
@@ -343,6 +411,7 @@ const BudgetTracker = ({ darkMode }) => {
           <div>
             <input
               type="number"
+              step="0.01"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               placeholder="Amount (฿)"
@@ -413,16 +482,18 @@ const BudgetTracker = ({ darkMode }) => {
         </h2>
         <AnimatePresence>
           {expenses.length === 0 ? (
-            <motion.p
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               className={`text-center py-8 ${darkMode ? 'text-gray-400' : 'text-gray-600'}`}
             >
-              No expenses yet today
-            </motion.p>
+              <SafeIcon icon={FiDollarSign} className="text-4xl mx-auto mb-4 opacity-50" />
+              <p>No expenses recorded today</p>
+              <p className="text-sm mt-2">Add your first expense above to get started!</p>
+            </motion.div>
           ) : (
             <div className="space-y-3">
-              {expenses.slice(-10).reverse().map((expense) => (
+              {expenses.slice().reverse().map((expense) => (
                 <motion.div
                   key={expense.id}
                   initial={{ x: -20, opacity: 0 }}
@@ -438,6 +509,7 @@ const BudgetTracker = ({ darkMode }) => {
                       <div className="flex gap-2">
                         <input
                           type="number"
+                          step="0.01"
                           value={editAmount}
                           onChange={(e) => setEditAmount(e.target.value)}
                           className={`flex-1 px-3 py-2 rounded-lg border text-sm ${
